@@ -1,0 +1,10 @@
+#!/usr/bin/env bash 
+
+plugin_path=/root/.lightning/testnet/debug/coreplug
+L1_CLI='docker exec -it core-lightning-testnet lightning-cli --testnet'
+
+/home/nitesh/.cargo/bin/cargo build --target-dir /srv/cas1/core-lightning/testnet
+``
+$L1_CLI plugin stop $plugin_path 
+
+$L1_CLI plugin start $plugin_path
