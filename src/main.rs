@@ -54,3 +54,76 @@ async fn main() -> Result<(), anyhow::Error> {
         Ok(())
     }
 }
+
+// use std::collections::HashSet;
+// use std::sync::Arc;
+
+// use futures::{SinkExt, StreamExt};
+// use tokio::net::{TcpListener, TcpStream};
+// use tokio::sync::{mpsc, Mutex};
+// use tokio::task;
+
+// use tokio_tungstenite::tungstenite::Message;
+// use tokio_tungstenite::{accept_async, tungstenite};
+
+// #[tokio::main]
+// async fn main() -> Result<(), anyhow::Error> {
+//     let (tx, rx) = mpsc::channel::<serde_json::Value>(100);
+
+//     let listener = TcpListener::bind("0.0.0.0:3013").await?;
+//     let addr = listener.local_addr()?;
+//     println!("Listening on {}", addr);
+
+//     let clients = Arc::new(Mutex::new(HashSet::new()));
+
+//     loop {
+//         let (stream, _) = listener.accept().await?;
+//         let clients = clients.clone();
+//         let tx = tx.clone();
+
+//         task::spawn(async move {
+//             if let Err(e) = handle_connection(stream, clients, tx).await {
+//                 eprintln!("Error: {}", e);
+//             }
+//         });
+//     }
+// }
+
+// async fn handle_connection(
+//     raw_stream: TcpStream,
+//     clients: Arc<Mutex<HashSet<std::net::SocketAddr>>>,
+//     tx: mpsc::Sender<serde_json::Value>,
+// ) -> Result<(), anyhow::Error> {
+//     let addr = raw_stream.peer_addr()?;
+//     let ws_stream = accept_async(raw_stream).await?;
+//     println!("New WebSocket connection: {}", addr);
+
+//     let (write, mut read) = ws_stream.split();
+
+//     let write = Arc::new(Mutex::new(write)); // Wrap write in an Arc and Mutex
+
+//     let write_clone = write.clone(); // Clone the Arc
+
+//     clients.lock().await.insert(addr);
+
+//     while let Some(Ok(message)) = read.next().await {
+//         if message.is_text() {
+//             let message = message.to_text().unwrap();
+//             println!("Received a message from {}: {}", addr, message);
+
+//             // Send the message to all connected clients
+//             let clients = clients.lock().await;
+//             for client in clients.iter() {
+//                 println!("Sending message to {:?} {:?}", addr, client);
+
+//                 let message = Message::Text(message.to_string());
+//                 let mut write = write_clone.lock().await; // Lock the Mutex to access write
+//                 write.send(message).await?;
+//             }
+//         }
+//     }
+
+//     clients.lock().await.remove(&addr);
+
+//     Ok(())
+// }
