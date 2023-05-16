@@ -1,4 +1,8 @@
-use std::{collections::HashSet, sync::Arc};
+use futures::stream::SplitSink;
+
+use std::sync::Arc;
+
+use tokio_tungstenite::tungstenite::Message;
 
 use futures::{stream::StreamExt, SinkExt};
 use log::{error, info};
@@ -6,25 +10,82 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::{mpsc, Mutex},
 };
-use tokio_tungstenite::{accept_async, tungstenite};
+use tokio_tungstenite::{accept_async, tungstenite, WebSocketStream};
+
+lazy_static::lazy_static! {
+    static ref WEBSOCKET_CLIENT_CONNECTED: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+}
+
+pub struct ConfiguredConnection {
+    address: std::net::SocketAddr,
+    writer: SplitSink<WebSocketStream<TcpStream>, Message>,
+}
 
 pub async fn start_websocket_server(
-    receiver: mpsc::Receiver<serde_json::Value>,
+    configured_connection_sender: mpsc::UnboundedSender<ConfiguredConnection>,
+    configured_connection_receiver: mpsc::UnboundedReceiver<ConfiguredConnection>,
+    event_receiver: mpsc::UnboundedReceiver<serde_json::Value>,
+) {
+    match start_websocket_server_inner(
+        configured_connection_sender,
+        Arc::new(Mutex::new(configured_connection_receiver)), // Wrap in Arc<Mutex<_>>
+        Arc::new(Mutex::new(event_receiver)),
+    )
+    .await
+    {
+        Ok(()) => (),
+        Err(error) => {
+            error!("{}", error);
+        }
+    }
+}
+
+async fn start_websocket_server_inner(
+    configured_connection_sender: mpsc::UnboundedSender<ConfiguredConnection>,
+    configured_connection_receiver: Arc<Mutex<mpsc::UnboundedReceiver<ConfiguredConnection>>>, // Change the type to Arc<Mutex<_>>
+    event_receiver: Arc<Mutex<mpsc::UnboundedReceiver<serde_json::Value>>>,
 ) -> Result<(), anyhow::Error> {
     let listener = TcpListener::bind("0.0.0.0:3012").await?;
-    let clients = Arc::new(Mutex::new(HashSet::new()));
-
-    let rx = Arc::new(tokio::sync::Mutex::new(receiver));
 
     while let Ok((stream, _)) = listener.accept().await {
-        let cloned_rx = Arc::clone(&rx);
-        let clients = clients.clone();
+        // Check if there is an active WebSocket client connected
+        let websocket_client_connected = *WEBSOCKET_CLIENT_CONNECTED.lock().await;
+
+        if websocket_client_connected {
+            // Reject the new connection
+            log::warn!(
+                "Rejecting new connection. An existing WebSocket client is already connected."
+            );
+
+            let message = tungstenite::Message::Text(
+                serde_json::json!({
+                    "type": "error",
+                    "message": "Only one client is allowed to connect at a time."
+                })
+                .to_string(),
+            );
+
+            let mut stream = accept_async(stream).await?;
+            stream.send(message).await?;
+
+            continue;
+        }
+
+        let configured_connection_sender = configured_connection_sender.clone();
 
         tokio::spawn(async move {
-            if let Err(err) = handle_connection(stream, cloned_rx, clients).await {
+            // Set the flag to indicate an active WebSocket client is now connected
+            *WEBSOCKET_CLIENT_CONNECTED.lock().await = true;
+
+            if let Err(err) = handle_connection(stream, configured_connection_sender).await {
                 log::error!("Error handling connection: {:?}", err);
             }
         });
+
+        tokio::spawn(broadcast_task(
+            configured_connection_receiver.clone(),
+            event_receiver.clone(),
+        ));
     }
 
     Ok(())
@@ -32,46 +93,100 @@ pub async fn start_websocket_server(
 
 async fn handle_connection(
     raw_stream: TcpStream,
-    rx: Arc<tokio::sync::Mutex<mpsc::Receiver<serde_json::Value>>>,
-    clients: Arc<Mutex<HashSet<std::net::SocketAddr>>>,
+    configured_connection_sender: mpsc::UnboundedSender<ConfiguredConnection>,
 ) -> Result<(), anyhow::Error> {
-    let addr = raw_stream.peer_addr()?;
+    let address = raw_stream.peer_addr()?;
     let ws_stream = accept_async(raw_stream).await?;
-    clients.lock().await.insert(addr);
 
-    let (write, mut read) = ws_stream.split();
+    let (writer, mut reader) = ws_stream.split();
 
-    let write = Arc::new(tokio::sync::Mutex::new(write)); // Wrap write in an Arc and Mutex
-
-    let write_clone = write.clone(); // Clone the Arc
-
-    while let Some(Ok(message)) = read.next().await {
-        if message.is_text() && message.to_string() == "something else" {
-            let mut rx = rx.lock().await;
-            while let Some(message) = rx.recv().await {
-                // Send the message to the WebSocket client
-                let message = tungstenite::Message::Text(message.to_string());
-
-                let mut write = write_clone.lock().await; // Lock the Mutex to access write
-                let send_result = write.send(message).await;
-                if let Err(e) = send_result {
-                    error!("Failed to send message to WebSocket client: {}", e);
-                    rx.close();
-                    break;
+    while let Some(message) = reader.next().await {
+        match message {
+            Ok(message) => {
+                if !message.is_text() {
+                    *WEBSOCKET_CLIENT_CONNECTED.lock().await = false;
+                    anyhow::bail!("Expected text message from client");
+                } else {
+                    let message = message.to_text().unwrap();
+                    info!("Received message from client: {}", message);
                 }
+            }
+
+            Err(error) => {
+                *WEBSOCKET_CLIENT_CONNECTED.lock().await = false;
+                anyhow::bail!("Failed to read message from client: {}", error);
             }
         }
     }
 
-    clients.lock().await.remove(&addr);
+    let configured_connection = ConfiguredConnection { address, writer };
+
+    // config logic
+    // put whichever flags to know which events to send in the COnfiguredConnection struct..
+    // parse from message
+
+    match configured_connection_sender.send(configured_connection) {
+        Ok(()) => (),
+        Err(_error) => {
+            *WEBSOCKET_CLIENT_CONNECTED.lock().await = false;
+            anyhow::bail!("Failed to send configured connection to boadcast task, broadcast task must have died.");
+        }
+    }
 
     Ok(())
 }
 
-// Function to get the list of connected clients
-fn get_connected_clients(clients: &HashSet<std::net::SocketAddr>) -> Vec<String> {
-    clients
-        .iter()
-        .map(|addr| addr.to_string())
-        .collect::<Vec<String>>()
+pub async fn broadcast_task(
+    configured_connection_receiver: Arc<Mutex<mpsc::UnboundedReceiver<ConfiguredConnection>>>, // Change the type to Arc<Mutex<_>>
+    event_receiver: Arc<Mutex<mpsc::UnboundedReceiver<serde_json::Value>>>,
+) {
+    match broadcast_task_inner(configured_connection_receiver, event_receiver).await {
+        Ok(()) => (),
+        Err(error) => {
+            error!("{}", error);
+        }
+    }
+}
+
+pub async fn broadcast_task_inner(
+    configured_connection_receiver: Arc<Mutex<mpsc::UnboundedReceiver<ConfiguredConnection>>>,
+    event_receiver: Arc<Mutex<mpsc::UnboundedReceiver<serde_json::Value>>>,
+) -> anyhow::Result<()> {
+    let mut conf_connection: Option<ConfiguredConnection> = None;
+    let mut configured_connection_receiver = configured_connection_receiver.lock().await;
+    let mut event_receiver = event_receiver.lock().await;
+
+    loop {
+        tokio::select! {
+            configured_connection = configured_connection_receiver.recv() => {
+                let configured_connection = match configured_connection {
+                    Some(configured_connection) => {
+                        info!("New websocket connection from {}", configured_connection.address);
+                        configured_connection
+                    },
+                    None => return Ok(()),
+                };
+                conf_connection = Some(configured_connection);
+            }
+
+
+            event = event_receiver.recv() => {
+                let event = match event {
+                    Some(event) => event.to_string(),
+                    None => return Ok(()),
+                };
+
+                if let Some(conf_connection) = conf_connection.as_mut() {
+                    match conf_connection.writer.send(Message::Text(event.clone())).await {
+                        Ok(_) => (),
+                        Err(error) => {
+                            *WEBSOCKET_CLIENT_CONNECTED.lock().await = false;
+                            error!("Failed to send to web socket (might just be closed): {}", error);
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

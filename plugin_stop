@@ -1,0 +1,6 @@
+#!/usr/bin/env bash 
+
+plugin_path=/root/.lightning/testnet/debug/coreplug
+L1_CLI='docker exec -it core-lightning-testnet lightning-cli --testnet'
+
+$L1_CLI plugin stop $plugin_path
