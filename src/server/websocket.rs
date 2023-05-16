@@ -100,24 +100,17 @@ async fn handle_connection(
 
     let (writer, mut reader) = ws_stream.split();
 
-    while let Some(message) = reader.next().await {
-        match message {
-            Ok(message) => {
-                if !message.is_text() {
-                    *WEBSOCKET_CLIENT_CONNECTED.lock().await = false;
-                    anyhow::bail!("Expected text message from client");
-                } else {
-                    let message = message.to_text().unwrap();
-                    info!("Received message from client: {}", message);
-                }
+    tokio::spawn(async move {
+        Ok(while let Some(Ok(message)) = reader.next().await {
+            if message.is_text() {
+                let message = message.to_string();
+                info!("Received message from {}: {}", address, message);
             }
 
-            Err(error) => {
-                *WEBSOCKET_CLIENT_CONNECTED.lock().await = false;
-                anyhow::bail!("Failed to read message from client: {}", error);
-            }
-        }
-    }
+            *WEBSOCKET_CLIENT_CONNECTED.lock().await = false;
+            anyhow::bail!("Received unexpected message from {}", address);
+        })
+    });
 
     let configured_connection = ConfiguredConnection { address, writer };
 
