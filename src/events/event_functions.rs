@@ -15,7 +15,7 @@ pub async fn channel_opened(
         "data": v
     });
 
-    let _ = p.state().event_sender.send(v);
+    let _ = p.state().send_message(v);
 
     Ok(())
 }
@@ -31,7 +31,7 @@ pub async fn channel_open_failed(
         "data": v
     });
 
-    let _ = p.state().event_sender.send(v);
+    let _ = p.state().send_message(v);
 
     Ok(())
 }
@@ -47,7 +47,7 @@ pub async fn channel_state_changed(
         "data": v
     });
 
-    let _ = p.state().event_sender.send(v);
+    let _ = p.state().send_message(v);
 
     Ok(())
 }
@@ -60,7 +60,7 @@ pub async fn connect(p: Plugin<Arc<PluginState>>, v: serde_json::Value) -> Resul
         "data": v
     });
 
-    let _ = p.state().hook_callback_sender.send(v);
+    let _ = p.state().send_message(v);
 
     Ok(())
 }
@@ -73,7 +73,7 @@ pub async fn disconnect(p: Plugin<Arc<PluginState>>, v: serde_json::Value) -> Re
         "data": v
     });
 
-    let _ = p.state().event_sender.send(v);
+    let _ = p.state().send_message(v);
 
     Ok(())
 }
@@ -89,7 +89,7 @@ pub async fn invoice_payment(
         "data": v
     });
 
-    let _ = p.state().event_sender.send(v);
+    let _ = p.state().send_message(v);
 
     Ok(())
 }
@@ -105,14 +105,14 @@ pub async fn invoice_creation(
         "data": v
     });
 
-    let _ = p.state().event_sender.send(v);
+    let _ = p.state().send_message(v);
 
     Ok(())
 }
 
 pub async fn warning(p: Plugin<Arc<PluginState>>, v: serde_json::Value) -> Result<(), Error> {
     log::info!("CorePlug: warning {}", v);
-    let _ = p.state().event_sender.send(v);
+    let _ = p.state().send_message(v);
 
     Ok(())
 }
@@ -125,7 +125,7 @@ pub async fn forward_event(p: Plugin<Arc<PluginState>>, v: serde_json::Value) ->
         "data": v
     });
 
-    let _ = p.state().event_sender.send(v);
+    let _ = p.state().send_message(v);
 
     Ok(())
 }
@@ -141,7 +141,7 @@ pub async fn sendpay_success(
         "data": v
     });
 
-    let _ = p.state().event_sender.send(v);
+    let _ = p.state().send_message(v);
 
     Ok(())
 }
@@ -157,7 +157,7 @@ pub async fn sendpay_failure(
         "data": v
     });
 
-    let _ = p.state().event_sender.send(v);
+    let _ = p.state().send_message(v);
 
     Ok(())
 }
@@ -170,7 +170,7 @@ pub async fn coin_movement(p: Plugin<Arc<PluginState>>, v: serde_json::Value) ->
         "data": v
     });
 
-    let _ = p.state().event_sender.send(v);
+    let _ = p.state().send_message(v);
 
     Ok(())
 }
@@ -186,7 +186,7 @@ pub async fn balance_snapshot(
         "data": v
     });
 
-    let _ = p.state().event_sender.send(v);
+    let _ = p.state().send_message(v);
 
     Ok(())
 }
@@ -199,7 +199,7 @@ pub async fn block_added(p: Plugin<Arc<PluginState>>, v: serde_json::Value) -> R
         "data": v
     });
 
-    let _ = p.state().event_sender.send(v);
+    let _ = p.state().send_message(v);
 
     Ok(())
 }
@@ -215,7 +215,7 @@ pub async fn openchannel_peer_sigs(
         "data": v
     });
 
-    let _ = p.state().event_sender.send(v);
+    let _ = p.state().send_message(v);
 
     Ok(())
 }
