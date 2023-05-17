@@ -2,6 +2,8 @@ mod events;
 mod server;
 
 extern crate serde_json;
+use std::sync::Arc;
+
 use cln_plugin::Builder;
 
 use events::event_functions::{
@@ -10,25 +12,50 @@ use events::event_functions::{
     openchannel_peer_sigs, sendpay_failure, sendpay_success, warning,
 };
 
-use server::websocket::start_websocket_server;
+use server::websocket::websocket_connection_reader_task;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
+use tokio::sync::watch;
+use tokio_tungstenite::tungstenite;
 
 #[derive(Clone)]
 pub struct PluginState {
-    event_sender: mpsc::UnboundedSender<serde_json::Value>,
+    /// To write to this, use tungstenite::Message::Text( your string ) or whatever
+    /// eg.                 serde_json::json!({
+    ///     "type": "error",
+    ///     "message": "Only one client is allowed to connect at a time."
+    /// })
+    /// .to_string()
+    websocket_message_sender_watch_receiver:
+        watch::Receiver<Option<mpsc::UnboundedSender<tungstenite::Message>>>,
+    hook_callback_sender: mpsc::UnboundedSender<HookCallbackMessage>,
+}
+
+pub enum HookCallbackMessage {
+    AddCallback {
+        id: usize,
+        response_channel: oneshot::Sender<serde_json::Value>,
+    },
+    RemoveCallback {
+        id: usize,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    let (event_sender, event_receiver) = mpsc::unbounded_channel();
-    let (configured_connection_sender, configured_connection_receiver) = mpsc::unbounded_channel();
+    let (websocket_message_sender_watch_sender, websocket_message_sender_watch_receiver) =
+        watch::channel(Option::<mpsc::UnboundedSender<tungstenite::Message>>::None);
+    let (hook_callback_sender, hook_callback_receiver) = mpsc::unbounded_channel();
+    // let (configured_connection_sender, configured_connection_receiver) = mpsc::unbounded_channel();
 
-    let state = PluginState { event_sender };
+    let plugin_state = Arc::new(PluginState {
+        websocket_message_sender_watch_receiver,
+        hook_callback_sender,
+    });
 
-    tokio::spawn(start_websocket_server(
-        configured_connection_sender,
-        configured_connection_receiver,
-        event_receiver,
+    tokio::spawn(websocket_connection_reader_task(
+        websocket_message_sender_watch_sender,
+        hook_callback_receiver,
     ));
 
     if let Some(plugin) = Builder::new(tokio::io::stdin(), tokio::io::stdout())
@@ -48,7 +75,7 @@ async fn main() -> Result<(), anyhow::Error> {
         .subscribe("balance_snapshot", balance_snapshot)
         .subscribe("block_added", block_added)
         .subscribe("openchannel_peer_sigs", openchannel_peer_sigs)
-        .start(state)
+        .start(plugin_state)
         .await?
     {
         let plug_res = plugin.join().await;
