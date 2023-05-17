@@ -1,5 +1,6 @@
 /target
 .env
 .env.local
+.idea
 cert.pem
 key.pem
