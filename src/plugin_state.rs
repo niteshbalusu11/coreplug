@@ -60,8 +60,8 @@ impl PluginState {
 
     pub fn handle_event(&self, event_name: &'static str, data: serde_json::Value) {
         if self.is_event_subscribed(event_name) {
-            p.state().send_message(serde_json::json!({
-                "type": "event_name",
+            self.send_message(serde_json::json!({
+                "type": event_name,
                 "data": data
             }));
         }
