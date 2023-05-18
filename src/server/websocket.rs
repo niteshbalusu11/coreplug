@@ -1,7 +1,8 @@
 use futures::stream::SplitStream;
 
+use crate::plugin_state::HookCallbackMessage;
 use crate::server::constants::EVENTS_LIST;
-use crate::HookCallbackMessage;
+use crate::AbortTaskOnDrop;
 use anyhow::{bail, Context};
 use futures::{future, stream::StreamExt, SinkExt};
 use log::{error, info};
@@ -24,6 +25,7 @@ pub struct ServerState {
     hook_response_channels: HashMap<usize, oneshot::Sender<serde_json::Value>>,
     connection_reader: Option<SplitStream<WebSocketStream<TcpStream>>>,
     listened_events_watch_sender: watch::Sender<Vec<&'static str>>,
+    client_write_task: Option<AbortTaskOnDrop>,
 }
 
 impl ServerState {
@@ -45,6 +47,7 @@ impl ServerState {
             hook_response_channels,
             connection_reader,
             listened_events_watch_sender,
+            client_write_task: None,
         })
     }
 
@@ -53,10 +56,15 @@ impl ServerState {
         message: Option<Result<Message, tungstenite::Error>>,
     ) -> anyhow::Result<()> {
         let Some(message) = message else {
+            self.connection_reader = None;
+
             // No more messages from client, must have disconnected
             if let Err(_error) = self.websocket_message_sender_watch_sender.send(None) {
                 bail!("Failed to send new websocket message sender to plugin, plugin must have died");
             }
+
+            // Abort the write task
+            self.client_write_task = None;
 
             return Ok(());
         };
@@ -153,19 +161,24 @@ impl ServerState {
         let (connection_writer_message_sender, mut connection_writer_message_receiver) =
             mpsc::unbounded_channel();
 
-        tokio::spawn(async move {
-            while let Some(connection_writer_message) =
-                connection_writer_message_receiver.recv().await
-            {
-                match writer.send(connection_writer_message).await {
-                    Ok(_) => (),
-                    Err(error) => {
-                        error!("Error writing message to connection: {}", error);
-                        return;
+        self.client_write_task = Some(
+            tokio::spawn(async move {
+                while let Some(connection_writer_message) =
+                    connection_writer_message_receiver.recv().await
+                {
+                    match writer.send(connection_writer_message).await {
+                        Ok(_) => (),
+                        Err(error) => {
+                            error!("Error writing message to connection: {}", error);
+                            return;
+                        }
                     }
                 }
-            }
-        });
+
+                info!("Client disconnected");
+            })
+            .into(),
+        );
 
         if let Err(_error) = self
             .websocket_message_sender_watch_sender
