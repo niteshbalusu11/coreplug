@@ -15,4 +15,7 @@ openssl = "0.10.52"
 serde = "1.0.163"
 serde_json = "1.0.96"
 tokio = { version = "1.28.1", features = ["full"] }
+axum = { version = "0.6.18", features = ["ws"] }
+
+[dev-dependencies]
 tokio-tungstenite = "0.18.0"

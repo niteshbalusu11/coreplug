@@ -53,7 +53,7 @@ mod test {
         let mut plugin_state = PluginState::new().await?;
 
         {
-            let (ws_stream, _) = connect_async("ws://127.0.0.1:3012").await?;
+            let (ws_stream, _) = connect_async("ws://127.0.0.1:3012/websocket").await?;
             let (mut write, _read) = StreamExt::split(ws_stream);
 
             // Wait for websocket message sender to become available

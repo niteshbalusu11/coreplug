@@ -1,17 +1,17 @@
 use crate::abort_tasks_on_drop::AbortTaskOnDrop;
 use crate::server::websocket::ServerState;
 use anyhow::bail;
+use axum::extract::ws;
 use log::error;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
-use tokio_tungstenite::tungstenite;
 
 pub struct PluginState {
     pub websocket_message_sender_watch_receiver:
-        watch::Receiver<Option<mpsc::UnboundedSender<tungstenite::Message>>>,
+        watch::Receiver<Option<mpsc::UnboundedSender<ws::Message>>>,
     listened_events_watch_receiver: watch::Receiver<Vec<&'static str>>,
     listened_hooks_watch_receiver: watch::Receiver<Vec<&'static str>>,
     hook_callback_sender: mpsc::UnboundedSender<HookCallbackMessage>,
@@ -22,7 +22,7 @@ pub struct PluginState {
 impl PluginState {
     pub async fn new() -> anyhow::Result<PluginState> {
         let (websocket_message_sender_watch_sender, websocket_message_sender_watch_receiver) =
-            watch::channel(Option::<mpsc::UnboundedSender<tungstenite::Message>>::None);
+            watch::channel(Option::<mpsc::UnboundedSender<ws::Message>>::None);
         let (listened_events_watch_sender, listened_events_watch_receiver) =
             watch::channel(Vec::new());
         let (listened_hooks_watch_sender, listened_hooks_watch_receiver) =
@@ -69,7 +69,7 @@ impl PluginState {
             .borrow()
             .as_ref()
         {
-            match sender.send(tungstenite::Message::Text(message.to_string())) {
+            match sender.send(ws::Message::Text(message.to_string())) {
                 Ok(()) => (),
                 Err(_error) => {
                     error!("Failed to send message to web socket - the receiver must have dropped");
