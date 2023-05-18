@@ -15,3 +15,6 @@ pub static EVENTS_LIST: &'static [&'static str] = &[
     "block_added",
     "openchannel_peer_sigs",
 ];
+
+// TODO: Add values
+pub static HOOKS_LIST: &'static [&'static str] = &[];

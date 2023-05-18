@@ -1,7 +1,7 @@
 use futures::stream::SplitStream;
 
 use crate::plugin_state::HookCallbackMessage;
-use crate::server::constants::EVENTS_LIST;
+use crate::server::constants::{EVENTS_LIST, HOOKS_LIST};
 use crate::AbortTaskOnDrop;
 use anyhow::{bail, Context};
 use futures::{future, stream::StreamExt, SinkExt};
@@ -25,6 +25,7 @@ pub struct ServerState {
     hook_response_channels: HashMap<usize, oneshot::Sender<serde_json::Value>>,
     connection_reader: Option<SplitStream<WebSocketStream<TcpStream>>>,
     listened_events_watch_sender: watch::Sender<Vec<&'static str>>,
+    listened_hooks_watch_sender: watch::Sender<Vec<&'static str>>,
     client_write_task: Option<AbortTaskOnDrop>,
 }
 
@@ -35,6 +36,7 @@ impl ServerState {
         >,
         hook_callback_receiver: mpsc::UnboundedReceiver<HookCallbackMessage>,
         listened_events_watch_sender: watch::Sender<Vec<&'static str>>,
+        listened_hooks_watch_sender: watch::Sender<Vec<&'static str>>,
     ) -> anyhow::Result<Self> {
         let listener = TcpListener::bind("0.0.0.0:3012").await?;
         let hook_response_channels = HashMap::<usize, oneshot::Sender<serde_json::Value>>::new();
@@ -47,6 +49,7 @@ impl ServerState {
             hook_response_channels,
             connection_reader,
             listened_events_watch_sender,
+            listened_hooks_watch_sender,
             client_write_task: None,
         })
     }
@@ -91,6 +94,9 @@ impl ServerState {
             SetEventSubscriptions {
                 events: Vec<String>,
             },
+            SetHookSubscriptions {
+                hooks: Vec<String>,
+            },
             HookResponse {
                 id: usize,
                 response: serde_json::Value,
@@ -121,6 +127,26 @@ impl ServerState {
 
                 if let Err(_error) = self.listened_events_watch_sender.send(events) {
                     bail!("Failed to send new set of events to listen to - plugin must have died");
+                }
+            }
+            ClientMessage::SetHookSubscriptions { hooks } => {
+                let hooks = hooks
+                    .into_iter()
+                    .map(|hook| {
+                        match HOOKS_LIST
+                            .iter()
+                            .find(|hooks_list_hook| hook.as_str() == **hooks_list_hook)
+                        {
+                            Some(hooks_list_hook) => Ok(*hooks_list_hook),
+                            None => bail!("Invalid hook: {}", hook.as_str()),
+                        }
+                    })
+                    .collect::<anyhow::Result<Vec<&'static str>>>()?;
+
+                info!("Setting hook subscriptions: {:?}", hooks);
+
+                if let Err(_error) = self.listened_hooks_watch_sender.send(hooks) {
+                    bail!("Failed to send new set of hooks to listen to - plugin must have died");
                 }
             }
             ClientMessage::HookResponse { id, response } => {

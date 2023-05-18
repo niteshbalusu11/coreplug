@@ -1,5 +1,4 @@
 use crate::abort_tasks_on_drop::AbortTaskOnDrop;
-use crate::server::constants::EVENTS_LIST;
 use crate::server::websocket::ServerState;
 use anyhow::bail;
 use log::error;
@@ -14,6 +13,7 @@ pub struct PluginState {
     pub websocket_message_sender_watch_receiver:
         watch::Receiver<Option<mpsc::UnboundedSender<tungstenite::Message>>>,
     listened_events_watch_receiver: watch::Receiver<Vec<&'static str>>,
+    listened_hooks_watch_receiver: watch::Receiver<Vec<&'static str>>,
     hook_callback_sender: mpsc::UnboundedSender<HookCallbackMessage>,
     next_hook_id: AtomicUsize,
     _server_task_handle: AbortTaskOnDrop,
@@ -24,7 +24,9 @@ impl PluginState {
         let (websocket_message_sender_watch_sender, websocket_message_sender_watch_receiver) =
             watch::channel(Option::<mpsc::UnboundedSender<tungstenite::Message>>::None);
         let (listened_events_watch_sender, listened_events_watch_receiver) =
-            watch::channel(EVENTS_LIST.to_vec());
+            watch::channel(Vec::new());
+        let (listened_hooks_watch_sender, listened_hooks_watch_receiver) =
+            watch::channel(Vec::new());
         let (hook_callback_sender, hook_callback_receiver) = mpsc::unbounded_channel();
 
         let server_task_handle = tokio::spawn(
@@ -32,6 +34,7 @@ impl PluginState {
                 websocket_message_sender_watch_sender,
                 hook_callback_receiver,
                 listened_events_watch_sender,
+                listened_hooks_watch_sender,
             )
             .await?
             .run_task(),
@@ -41,6 +44,7 @@ impl PluginState {
             websocket_message_sender_watch_receiver,
             hook_callback_sender,
             listened_events_watch_receiver,
+            listened_hooks_watch_receiver,
             next_hook_id: AtomicUsize::new(1),
             _server_task_handle: server_task_handle.into(),
         };
@@ -52,6 +56,10 @@ impl PluginState {
         self.listened_events_watch_receiver
             .borrow()
             .contains(&event)
+    }
+
+    pub fn is_hook_subscribed(&self, hook: &'static str) -> bool {
+        self.listened_hooks_watch_receiver.borrow().contains(&hook)
     }
 
     /// Sends a message to the connected websocket, if there is one.
