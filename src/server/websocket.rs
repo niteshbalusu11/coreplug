@@ -4,26 +4,27 @@ use crate::plugin_state::HookCallbackMessage;
 use crate::server::constants::{EVENTS_LIST, HOOKS_LIST};
 use crate::AbortTaskOnDrop;
 use anyhow::{bail, Context};
+use axum::extract::ws::Message;
+use axum::extract::ws::WebSocket;
+use axum::extract::WebSocketUpgrade;
+use axum::response::IntoResponse;
+use axum::routing::get;
+use axum::Router;
 use futures::{future, stream::StreamExt, SinkExt};
 use log::{error, info};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
-use tokio::{
-    net::{TcpListener, TcpStream},
-    sync::mpsc,
-};
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{accept_async, tungstenite, WebSocketStream};
 
 pub struct ServerState {
     websocket_message_sender_watch_sender: watch::Sender<Option<mpsc::UnboundedSender<Message>>>,
     hook_callback_receiver: mpsc::UnboundedReceiver<HookCallbackMessage>,
-    listener: TcpListener,
+    _axum_server_task: AbortTaskOnDrop,
+    websocket_receiver: mpsc::UnboundedReceiver<WebSocket>,
     hook_response_channels: HashMap<usize, oneshot::Sender<serde_json::Value>>,
-    connection_reader: Option<SplitStream<WebSocketStream<TcpStream>>>,
+    connection_reader: Option<SplitStream<WebSocket>>,
     listened_events_watch_sender: watch::Sender<Vec<&'static str>>,
     listened_hooks_watch_sender: watch::Sender<Vec<&'static str>>,
     client_write_task: Option<AbortTaskOnDrop>,
@@ -38,16 +39,41 @@ impl ServerState {
         listened_events_watch_sender: watch::Sender<Vec<&'static str>>,
         listened_hooks_watch_sender: watch::Sender<Vec<&'static str>>,
     ) -> anyhow::Result<Self> {
-        let listener = TcpListener::bind("0.0.0.0:3012").await?;
-        let hook_response_channels = HashMap::<usize, oneshot::Sender<serde_json::Value>>::new();
-        let connection_reader: Option<SplitStream<WebSocketStream<TcpStream>>> = None;
+        let (websocket_sender, websocket_receiver) = mpsc::unbounded_channel();
+
+        async fn websocket_handler(
+            ws: WebSocketUpgrade,
+            axum::extract::State(sender): axum::extract::State<mpsc::UnboundedSender<WebSocket>>,
+        ) -> impl IntoResponse {
+            ws.on_upgrade(|socket| async move {
+                if let Err(_error) = sender.send(socket) {
+                    error!("Failed to send websocket to server from Axum callback, server must have died");
+                }
+            })
+        }
+
+        let listen_address = "0.0.0.0:3012";
+
+        let axum_server_task_handle =
+            tokio::spawn(
+                axum::Server::bind(&listen_address.parse().with_context(|| {
+                    format!("Failed to parse listen address: {}", listen_address)
+                })?)
+                .serve(
+                    Router::new()
+                        .route("/websocket", get(websocket_handler))
+                        .with_state(websocket_sender)
+                        .into_make_service(),
+                ),
+            );
 
         Ok(Self {
             websocket_message_sender_watch_sender,
             hook_callback_receiver,
-            listener,
-            hook_response_channels,
-            connection_reader,
+            _axum_server_task: axum_server_task_handle.into(),
+            websocket_receiver,
+            hook_response_channels: HashMap::new(),
+            connection_reader: None,
             listened_events_watch_sender,
             listened_hooks_watch_sender,
             client_write_task: None,
@@ -56,7 +82,7 @@ impl ServerState {
 
     pub async fn handle_client_message(
         &mut self,
-        message: Option<Result<Message, tungstenite::Error>>,
+        message: Option<Result<Message, axum::Error>>,
     ) -> anyhow::Result<()> {
         let Some(message) = message else {
             self.connection_reader = None;
@@ -170,18 +196,22 @@ impl ServerState {
 
     pub async fn handle_new_client_connection(
         &mut self,
-        new_connection: tokio::io::Result<(TcpStream, SocketAddr)>,
+        websocket: Option<WebSocket>,
     ) -> anyhow::Result<()> {
-        // let address = raw_stream.peer_addr()?;
-        let (tcp_stream, _) = new_connection?;
-        let mut ws_stream = accept_async(tcp_stream).await?;
+        let Some(websocket) = websocket else {
+            bail!("New websocket connection sender seems to have died, server must have died");
+        };
+
         if self.connection_reader.is_some() {
             // We already have a connection, reject the new one
-            if let Err(error) = ws_stream.close(None).await {
-                error!("Error rejecting (closing) new client connection while a client is already connected: {}", error);
+            if let Err(error) = websocket.close().await {
+                bail!("Error rejecting (closing) new client connection while a client is already connected: {}", error);
             }
+
+            return Ok(());
         }
-        let (mut writer, reader) = StreamExt::split(ws_stream);
+
+        let (mut writer, reader) = StreamExt::split(websocket);
         self.connection_reader = Some(reader);
 
         let (connection_writer_message_sender, mut connection_writer_message_receiver) =
@@ -253,7 +283,7 @@ impl ServerState {
                     self.handle_client_message(client_message).await?;
                 }
 
-                new_client_connection = self.listener.accept() => {
+                new_client_connection = self.websocket_receiver.recv() => {
                     self.handle_new_client_connection(new_client_connection).await?;
                 }
 
