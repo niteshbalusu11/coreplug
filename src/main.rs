@@ -1,16 +1,12 @@
 mod abort_tasks_on_drop;
-mod events;
+mod event_callbacks;
 mod plugin_state;
 mod server;
 
 use crate::abort_tasks_on_drop::AbortTaskOnDrop;
 use crate::plugin_state::PluginState;
 use cln_plugin::Builder;
-use events::event_functions::{
-    balance_snapshot, block_added, channel_open_failed, channel_opened, channel_state_changed,
-    coin_movement, connect, disconnect, forward_event, invoice_creation, invoice_payment,
-    openchannel_peer_sigs, sendpay_failure, sendpay_success, warning,
-};
+use event_callbacks::*;
 use std::sync::Arc;
 use std::time::Duration;
 
