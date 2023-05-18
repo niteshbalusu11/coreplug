@@ -58,8 +58,13 @@ impl PluginState {
             .contains(&event)
     }
 
-    pub fn is_hook_subscribed(&self, hook: &'static str) -> bool {
-        self.listened_hooks_watch_receiver.borrow().contains(&hook)
+    pub fn handle_event(&self, event_name: &'static str, data: serde_json::Value) {
+        if self.is_event_subscribed(event_name) {
+            p.state().send_message(serde_json::json!({
+                "type": "event_name",
+                "data": data
+            }));
+        }
     }
 
     /// Sends a message to the connected websocket, if there is one.
