@@ -134,8 +134,9 @@ impl ServerState {
             return Ok(());
         };
 
-        match serde_json::from_str::<ClientMessage>(&message)? {
-            ClientMessage::SetEventSubscriptions { events } => {
+        match serde_json::from_str::<ClientMessage>(&message) {
+            Ok(ClientMessage::SetEventSubscriptions { events }) => {
+                info!("inside this thing");
                 let events = events
                     .into_iter()
                     .map(|event| {
@@ -155,7 +156,7 @@ impl ServerState {
                     bail!("Failed to send new set of events to listen to - plugin must have died");
                 }
             }
-            ClientMessage::SetHookSubscriptions { hooks } => {
+            Ok(ClientMessage::SetHookSubscriptions { hooks }) => {
                 let hooks = hooks
                     .into_iter()
                     .map(|hook| {
@@ -175,7 +176,7 @@ impl ServerState {
                     bail!("Failed to send new set of hooks to listen to - plugin must have died");
                 }
             }
-            ClientMessage::HookResponse { id, response } => {
+            Ok(ClientMessage::HookResponse { id, response }) => {
                 let Some(hook_response_channel) = self.hook_response_channels.remove(&id) else {
                     // should probably tell the client they did a bad thing here
                     error!("Received hook response for invalid id: {}", id);
@@ -188,6 +189,9 @@ impl ServerState {
                         error!("Received hook response for valid id '{}', but the hook callback had already moved on", id);
                     }
                 }
+            }
+            Err(_) => {
+                error!("Received invalid message from client: {}", message);
             }
         }
 

@@ -8,7 +8,6 @@ use crate::plugin_state::PluginState;
 use cln_plugin::Builder;
 use event_callbacks::*;
 use std::sync::Arc;
-use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -46,6 +45,7 @@ async fn main() -> anyhow::Result<()> {
 mod test {
     use super::*;
     use futures::{SinkExt, StreamExt};
+    use std::time::Duration;
     use tokio_tungstenite::connect_async;
 
     #[tokio::test]
