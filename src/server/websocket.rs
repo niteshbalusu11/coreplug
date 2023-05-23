@@ -284,7 +284,12 @@ impl ServerState {
 
             tokio::select! {
                 client_message = receive_connection_message_future => {
-                    self.handle_client_message(client_message).await?;
+                    match self.handle_client_message(client_message).await {
+                        Ok(()) => (),
+                        Err(error) => {
+                            error!("{}", error);
+                        }
+                    }
                 }
 
                 new_client_connection = self.websocket_receiver.recv() => {
